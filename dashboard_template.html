@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Word Count on Hadoop MapReduce</title>
+<style>
+:root{--bg:#eef0ec;--panel:#f9faf7;--ink:#17202a;--muted:#5d6b76;--line:#d3d9d2;--slate:#3d5a6c;--gold:#d99a00;--brick:#b4442f}
+*{box-sizing:border-box}
+html{color-scheme:light}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 "Segoe UI",system-ui,-apple-system,sans-serif}
+.wrap{max-width:1040px;margin:0 auto;padding:56px 24px 40px}
+h1,h2,.serif{font-family:Georgia,"Times New Roman",serif;font-weight:400}
+h1{font-size:clamp(2rem,5.2vw,3.5rem);line-height:1.12;margin:0 0 14px;letter-spacing:-.01em;max-width:18em}
+h2{font-size:1.6rem;margin:0 0 6px}
+h3{font-size:1rem;margin:0 0 12px;font-weight:600}
+p{margin:0}
+.lede{color:var(--muted);max-width:40em;font-size:1.05rem}
+section{margin-top:64px}
+.sub{color:var(--muted);max-width:44em;margin-bottom:22px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:22px}
+.num{font-variant-numeric:tabular-nums}
+
+/* funnel */
+.funnel{display:grid;gap:14px;margin-top:30px}
+.stage{display:grid;grid-template-columns:190px 1fr;gap:18px;align-items:center}
+.stage b{display:block;font-weight:600}
+.stage small{color:var(--muted)}
+.track{position:relative;height:46px;background:#e2e6df;border-radius:3px;overflow:hidden}
+.fill{height:100%;width:0;background:var(--slate);transition:width 1.1s cubic-bezier(.2,.7,.2,1)}
+.stage:nth-child(2) .fill{background:var(--gold)}
+.stage:nth-child(3) .fill{background:var(--ink)}
+.val{position:absolute;left:12px;top:0;height:100%;display:flex;align-items:center;font:1.25rem Georgia,serif;color:#fff;mix-blend-mode:normal;text-shadow:0 0 6px rgba(0,0,0,.35)}
+.check{margin-top:14px;color:var(--muted);font-size:.9rem}
+
+/* top words */
+.two{display:grid;grid-template-columns:1.5fr 1fr;gap:22px}
+.row{display:grid;grid-template-columns:78px 1fr 64px;gap:12px;align-items:center;padding:3px 0}
+.row .w{font:italic 1.05rem Georgia,serif}
+.bar{height:14px;background:#e2e6df;border-radius:2px;overflow:hidden}
+.bar i{display:block;height:100%;background:var(--slate)}
+.row .n{text-align:right;color:var(--muted);font-variant-numeric:tabular-nums;font-size:.92rem}
+label{font-weight:600;display:block;margin-bottom:8px}
+input{width:100%;font:inherit;padding:11px 12px;border:1px solid var(--slate);border-radius:4px;background:#fff;color:var(--ink)}
+input:focus-visible{outline:3px solid var(--gold);outline-offset:1px}
+#res{margin-top:14px;color:var(--muted)}
+
+/* zipf */
+svg{width:100%;height:auto;display:block}
+svg text{font:11px "Segoe UI",system-ui,sans-serif;fill:var(--muted)}
+
+/* combiner */
+.cmp{display:grid;grid-template-columns:1fr 1fr;gap:22px}
+.cb{display:grid;grid-template-columns:118px 1fr;gap:10px;align-items:center;margin:8px 0;font-size:.92rem}
+.cb .t{height:22px;background:#e2e6df;border-radius:2px;overflow:hidden}
+.cb .t i{display:block;height:100%}
+.cb .t i.nc{background:var(--brick)}.cb .t i.c{background:var(--gold)}
+.cb span.v{grid-column:2;color:var(--muted);margin-top:-6px;font-variant-numeric:tabular-nums}
+.cut{font:2rem Georgia,serif;margin-top:10px}
+.note{margin-top:16px;color:var(--muted);font-size:.9rem;max-width:56em}
+footer{margin-top:64px;padding-top:18px;border-top:1px solid var(--line);color:var(--muted);font-size:.88rem}
+
+@media(max-width:760px){.two,.cmp{grid-template-columns:1fr}.stage{grid-template-columns:1fr;gap:6px}.wrap{padding-top:36px}}
+@media(prefers-reduced-motion:reduce){.fill{transition:none}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1 id="headline"></h1>
+  <p class="lede" id="lede"></p>
+  <div class="funnel" id="funnel"></div>
+  <p class="check" id="check"></p>
+</header>
+
+<section>
+  <h2>What the corpus is made of</h2>
+  <p class="sub">The twenty most frequent words, counted across every book. Look up any word to see where it ranks.</p>
+  <div class="two">
+    <div class="panel" id="top"></div>
+    <div class="panel">
+      <label for="q">Look up a word</label>
+      <input id="q" type="text" autocomplete="off" placeholder="whale, elizabeth, rabbit">
+      <p id="res">Type any word to see how often it appears.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>A few words do most of the work</h2>
+  <p class="sub">Plotted by rank on log scales, the counts fall close to a straight line. That is Zipf's law: the second most common word appears about half as often as the first, the third about a third as often. The dashed line shows that ideal.</p>
+  <div class="panel"><svg id="zipf" viewBox="0 0 640 300" role="img" aria-label="Word frequency against rank on log-log axes"></svg></div>
+</section>
+
+<section>
+  <h2>What the combiner saved</h2>
+  <p class="sub">The same job ran twice on the same input, once with a combiner and once without. Both runs produced identical output. The combiner adds up counts inside each mapper first, so far less data crosses the network to the reducers.</p>
+  <div class="cmp">
+    <div class="panel" id="c1"></div>
+    <div class="panel" id="c2"></div>
+  </div>
+  <p class="note" id="timenote"></p>
+</section>
+
+<footer id="foot"></footer>
+</div>
+
+<script>window.DATA=__DATA__;</script>
+<script>
+const D=window.DATA,W=D.words,M=D.metrics,$=id=>document.getElementById(id);
+const fmt=n=>n.toLocaleString('en-US');
+const fmtB=n=>n>=1e6?(n/1e6).toFixed(2)+' MB':(n/1e3).toFixed(0)+' kB';
+const total=W.reduce((s,w)=>s+w[1],0);
+
+$('headline').textContent=fmt(total)+' words went in. '+fmt(W.length)+' distinct words came out.';
+$('lede').textContent='A Hadoop MapReduce job counted every word in '+M.books+' books ('+fmtB(M.input_bytes)+', '+fmt(M.input_lines)+' lines). This is where the numbers shrank.';
+
+const stages=[
+ ['Mappers emit',M.map_output_records,'one (word, 1) pair per word'],
+ ['After the combiner',M.with_combiner.reduce_input_records,'partial sums, one per word per mapper'],
+ ['Reducers write',W.length,'one line per distinct word']];
+$('funnel').innerHTML=stages.map(s=>'<div class="stage"><div><b>'+s[0]+'</b><small>'+s[2]+'</small></div><div class="track"><div class="fill" data-w="'+(s[1]/stages[0][1]*100)+'"></div><span class="val num">'+fmt(s[1])+'</span></div></div>').join('');
+requestAnimationFrame(()=>requestAnimationFrame(()=>document.querySelectorAll('.fill').forEach(f=>f.style.width=Math.max(+f.dataset.w,2)+'%')));
+$('check').textContent=total===M.map_output_records
+ ?'Check passed: the counts in the output add up to exactly the '+fmt(M.map_output_records)+' pairs the mappers emitted.'
+ :'Check failed: output counts add up to '+fmt(total)+', but the mappers emitted '+fmt(M.map_output_records)+'. Rerun the job and rebuild this page.';
+
+const topWords=W.slice(0,20),mx=topWords[0][1];
+$('top').innerHTML=topWords.map(w=>'<div class="row"><span class="w">'+w[0]+'</span><span class="bar"><i style="width:'+(w[1]/mx*100)+'%"></i></span><span class="n">'+fmt(w[1])+'</span></div>').join('');
+
+const idx=new Map(W.map((w,i)=>[w[0],i]));
+$('q').addEventListener('input',e=>{
+ const k=e.target.value.trim().toLowerCase(),o=$('res');
+ if(!k){o.textContent='Type any word to see how often it appears.';return}
+ const i=idx.get(k);
+ o.textContent=i===undefined?'"'+k+'" does not appear in these books.':'"'+k+'" appears '+fmt(W[i][1])+' times. It ranks '+fmt(i+1)+' of '+fmt(W.length)+' and makes up '+(W[i][1]/total*100).toFixed(3)+'% of all words.';
+});
+
+(function(){
+ const w=640,h=300,l=52,b=36,t=12,r=14,N=W.length,mv=W[0][1],lx=Math.log10(N),ly=Math.log10(mv);
+ const X=k=>l+Math.log10(k)/lx*(w-l-r),Y=c=>t+(1-Math.log10(c)/ly)*(h-t-b);
+ let d='',s=Math.max(1,Math.floor(N/500));
+ for(let i=0;i<N;i+=(i<60?1:s))d+=(d?'L':'M')+X(i+1).toFixed(1)+' '+Y(W[i][1]).toFixed(1);
+ let g='';
+ for(let k=1;k<=N;k*=10)g+='<line x1="'+X(k)+'" x2="'+X(k)+'" y1="'+t+'" y2="'+(h-b)+'" stroke="#d3d9d2"/><text x="'+X(k)+'" y="'+(h-b+16)+'" text-anchor="middle">'+fmt(k)+'</text>';
+ for(let c=1;c<=mv;c*=10)g+='<line x1="'+l+'" x2="'+(w-r)+'" y1="'+Y(c)+'" y2="'+Y(c)+'" stroke="#d3d9d2"/><text x="'+(l-8)+'" y="'+(Y(c)+4)+'" text-anchor="end">'+fmt(c)+'</text>';
+ g+='<line x1="'+X(1)+'" y1="'+Y(mv)+'" x2="'+X(N)+'" y2="'+Y(Math.max(1,mv/N))+'" stroke="#5d6b76" stroke-dasharray="5 4"/>';
+ g+='<path d="'+d+'" fill="none" stroke="#3d5a6c" stroke-width="2.4" stroke-linejoin="round"/>';
+ g+='<text x="'+((l+w-r)/2)+'" y="'+(h-4)+'" text-anchor="middle">rank of word (most common = 1)</text>';
+ g+='<text x="14" y="'+((t+h-b)/2)+'" text-anchor="middle" transform="rotate(-90 14 '+((t+h-b)/2)+')">times it appears</text>';
+ $('zipf').innerHTML=g;
+})();
+
+function pair(id,title,a,b,f){
+ const red=Math.round((1-b/a)*100);
+ $(id).innerHTML='<h3>'+title+'</h3>'
+ +'<div class="cb"><span>Without combiner</span><div class="t"><i class="nc" style="width:100%"></i></div><span class="v">'+f(a)+'</span></div>'
+ +'<div class="cb"><span>With combiner</span><div class="t"><i class="c" style="width:'+Math.max(b/a*100,1.5)+'%"></i></div><span class="v">'+f(b)+'</span></div>'
+ +'<p class="cut">'+red+'% less</p>';
+}
+pair('c1','Records sent to the reducers',M.without_combiner.reduce_input_records,M.with_combiner.reduce_input_records,fmt);
+pair('c2','Data shuffled across the network',M.without_combiner.shuffle_bytes,M.with_combiner.shuffle_bytes,fmtB);
+$('timenote').textContent='Wall-clock time was '+M.with_combiner.seconds+' s with the combiner and '+M.without_combiner.seconds+' s without, from one run each. On an input this small, job startup dominates, so treat the time difference as indicative only. The record and byte counts are exact.';
+$('foot').textContent=M.environment;
+</script>
+</body>
+</html>

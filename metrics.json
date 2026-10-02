@@ -1,0 +1,17 @@
+{
+  "books": 3,
+  "input_bytes": 2222964,
+  "input_lines": 40991,
+  "map_output_records": 384223,
+  "with_combiner": {
+    "reduce_input_records": 27122,
+    "shuffle_bytes": 388733,
+    "seconds": 16.3
+  },
+  "without_combiner": {
+    "reduce_input_records": 384223,
+    "shuffle_bytes": 4362714,
+    "seconds": 20.6
+  },
+  "environment": "Hadoop 3.3.6, single-node cluster (HDFS and YARN), OpenJDK 11, Ubuntu on WSL. Job written in Java with Maven."
+}

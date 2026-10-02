@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Run word count on Hadoop</title>
+<style>
+:root{--bg:#eef0ec;--panel:#f9faf7;--ink:#17202a;--muted:#5d6b76;--line:#d3d9d2;--slate:#3d5a6c;--gold:#d99a00;--brick:#b4442f}
+*{box-sizing:border-box}
+html{color-scheme:light}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 "Segoe UI",system-ui,-apple-system,sans-serif}
+.wrap{max-width:960px;margin:0 auto;padding:48px 24px 40px}
+h1,h2{font-family:Georgia,"Times New Roman",serif;font-weight:400}
+h1{font-size:clamp(1.9rem,4.6vw,3rem);line-height:1.12;margin:0 0 12px;max-width:16em}
+h2{font-size:1.5rem;margin:0 0 14px}
+p{margin:0}
+.lede,.muted{color:var(--muted)}
+.lede{max-width:42em}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:22px}
+.input{margin-top:28px}
+textarea{width:100%;min-height:170px;resize:vertical;font:inherit;padding:12px;border:1px solid var(--slate);border-radius:4px;background:#fff;color:var(--ink)}
+.controls{display:flex;flex-wrap:wrap;gap:16px;align-items:center;margin-top:14px}
+button,.file{font:inherit;padding:10px 18px;border-radius:4px;border:1px solid var(--slate);background:#fff;color:var(--ink);cursor:pointer}
+button.go{background:var(--slate);color:#fff;font-weight:600}
+button:disabled{opacity:.55;cursor:wait}
+:focus-visible{outline:3px solid var(--gold);outline-offset:2px}
+.file input{display:none}
+.meta{margin-left:auto;color:var(--muted);font-size:.9rem}
+#state{margin-top:18px;min-height:1.5em}
+#state.err{color:var(--brick);white-space:pre-wrap}
+.spin{display:inline-block;width:12px;height:12px;border:2px solid var(--line);border-top-color:var(--slate);border-radius:50%;animation:s 1s linear infinite;vertical-align:-1px;margin-right:8px}
+@keyframes s{to{transform:rotate(360deg)}}
+#out{display:none;margin-top:44px}
+.funnel{display:grid;gap:12px;margin:18px 0 6px}
+.stage{display:grid;grid-template-columns:190px 1fr;gap:16px;align-items:center}
+.stage b{display:block;font-weight:600}.stage small{color:var(--muted)}
+.track{position:relative;height:40px;background:#e2e6df;border-radius:3px;overflow:hidden}
+.fill{height:100%;background:var(--slate);transition:width .9s cubic-bezier(.2,.7,.2,1)}
+.stage:nth-child(2) .fill{background:var(--gold)}.stage:nth-child(3) .fill{background:var(--ink)}
+.val{position:absolute;left:12px;top:0;height:100%;display:flex;align-items:center;font:1.15rem Georgia,serif;color:#fff;text-shadow:0 0 6px rgba(0,0,0,.35);font-variant-numeric:tabular-nums}
+.two{display:grid;grid-template-columns:1.4fr 1fr;gap:22px;margin-top:32px}
+.row{display:grid;grid-template-columns:80px 1fr 56px;gap:12px;align-items:center;padding:3px 0}
+.row .w{font:italic 1.02rem Georgia,serif}
+.bar{height:13px;background:#e2e6df;border-radius:2px;overflow:hidden}.bar i{display:block;height:100%;background:var(--slate)}
+.row .n{text-align:right;color:var(--muted);font-variant-numeric:tabular-nums;font-size:.92rem}
+table{width:100%;border-collapse:collapse;font-size:.93rem}
+td{padding:6px 0;border-bottom:1px solid var(--line)}td:last-child{text-align:right;font-variant-numeric:tabular-nums}
+@media(max-width:760px){.two{grid-template-columns:1fr}.stage{grid-template-columns:1fr;gap:6px}.meta{margin-left:0}}
+@media(prefers-reduced-motion:reduce){.fill,.spin{transition:none;animation:none}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Give it any text. Hadoop will count the words.</h1>
+  <p class="lede">Paste text or choose a .txt file, then run. Your text is uploaded to HDFS and counted by the real MapReduce job on this machine. A run takes about 15 to 20 seconds.</p>
+
+  <div class="panel input">
+    <label for="t" class="muted">Text to count</label>
+    <textarea id="t">It was the best of times, it was the worst of times, it was the age of wisdom, it was the age of foolishness. The time to count words is any time, and the words to count are all words.</textarea>
+    <div class="controls">
+      <button class="go" id="run">Run MapReduce</button>
+      <label class="file">Choose .txt file<input type="file" id="f" accept=".txt,text/plain"></label>
+      <label><input type="checkbox" id="comb" checked> Use combiner</label>
+      <span class="meta" id="size"></span>
+    </div>
+    <div id="state" role="status"></div>
+  </div>
+
+  <div id="out">
+    <h2 id="head"></h2>
+    <p class="muted" id="sub"></p>
+    <div class="funnel" id="funnel"></div>
+    <div class="two">
+      <div class="panel"><h2>Most frequent words</h2><div id="top"></div></div>
+      <div class="panel"><h2>Job counters</h2><table id="ctr"></table></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const $=id=>document.getElementById(id),fmt=n=>n.toLocaleString('en-US');
+const ta=$('t'),btn=$('run'),stateEl=$('state');
+function size(){$('size').textContent=fmt(new Blob([ta.value]).size)+' bytes'}
+ta.addEventListener('input',size);size();
+
+$('f').addEventListener('change',e=>{
+  const file=e.target.files[0];if(!file)return;
+  if(file.size>5e6){stateEl.className='err';stateEl.textContent='That file is over 5 MB. Choose a smaller one.';return}
+  const r=new FileReader();r.onload=()=>{ta.value=r.result;size();stateEl.className='';stateEl.textContent='Loaded '+file.name+'. Click Run MapReduce.'};
+  r.readAsText(file);
+});
+
+btn.addEventListener('click',async()=>{
+  btn.disabled=true;stateEl.className='';
+  const t0=Date.now();
+  const tick=setInterval(()=>{stateEl.innerHTML='<span class="spin"></span>Hadoop is running your job… '+Math.floor((Date.now()-t0)/1000)+' s'},250);
+  try{
+    const r=await fetch('/api/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:ta.value,combiner:$('comb').checked})});
+    const j=await r.json();
+    if(!r.ok)throw new Error(j.error||'The job failed.');
+    clearInterval(tick);stateEl.textContent='Done in '+j.seconds+' s.';
+    show(j);
+  }catch(err){
+    clearInterval(tick);stateEl.className='err';
+    stateEl.textContent=err.message.indexOf('Failed to fetch')>=0?'Could not reach the server. Is python3 server.py still running?':err.message;
+  }finally{btn.disabled=false}
+});
+
+function show(j){
+  const W=j.words,C=j.counters,total=W.reduce((s,w)=>s+w[1],0);
+  $('out').style.display='block';
+  $('head').textContent=fmt(total)+' words in, '+fmt(W.length)+' distinct words out';
+  $('sub').textContent='Ran '+(j.combiner?'with':'without')+' the combiner in '+j.seconds+' s. Counted by a real Hadoop MapReduce job on your cluster.';
+  const stages=[['Mappers emit',C.map_output_records,'one (word, 1) pair per word'],
+    [j.combiner?'After the combiner':'Sent to reducers',C.reduce_input_records,j.combiner?'partial sums per mapper':'no combiner, so every pair is sent'],
+    ['Reducers write',W.length,'one line per distinct word']];
+  $('funnel').innerHTML=stages.map(s=>'<div class="stage"><div><b>'+s[0]+'</b><small>'+s[2]+'</small></div><div class="track"><div class="fill" style="width:0" data-w="'+(s[1]/Math.max(stages[0][1],1)*100)+'"></div><span class="val">'+fmt(s[1])+'</span></div></div>').join('');
+  requestAnimationFrame(()=>requestAnimationFrame(()=>document.querySelectorAll('.fill').forEach(f=>f.style.width=Math.max(+f.dataset.w,2)+'%')));
+  const tw=W.slice(0,15),mx=tw[0][1];
+  $('top').innerHTML=tw.map(w=>'<div class="row"><span class="w">'+w[0]+'</span><span class="bar"><i style="width:'+(w[1]/mx*100)+'%"></i></span><span class="n">'+fmt(w[1])+'</span></div>').join('');
+  const rows=[['Map input records (lines)',C.map_input_records],['Map output records',C.map_output_records],['Combine input records',C.combine_input_records],['Combine output records',C.combine_output_records],['Reduce shuffle bytes',C.shuffle_bytes],['Reduce input records',C.reduce_input_records],['Reduce output records',C.reduce_output_records]];
+  $('ctr').innerHTML=rows.map(r=>'<tr><td>'+r[0]+'</td><td>'+fmt(r[1])+'</td></tr>').join('');
+  $('out').scrollIntoView({behavior:'smooth',block:'start'});
+}
+</script>
+</body>
+</html>

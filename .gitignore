@@ -1,0 +1,4 @@
+target/
+dashboard.html
+data/*.txt
+__pycache__/
